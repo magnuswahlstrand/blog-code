@@ -2,17 +2,15 @@ terraform {
 }
 
 locals {
-  pubsub_name = "user-created"
+  topic_name  = "user-created"
+  app_name    = "app"
+  environment = "integration"
 }
 
 provider "google" {
   project = var.project_id
 }
 
-#data "google_project" "project" {
-#}
-
-# Service accounts and IAM
 resource "google_service_account" "pubsub_sa" {
   account_id = "pubsub-sa"
 }
@@ -21,10 +19,10 @@ module "pubsub-main" {
   source     = "terraform-google-modules/pubsub/google"
   project_id = var.project_id
 
-  topic              = "${local.pubsub_name}"
+  topic              = "${local.topic_name}"
   pull_subscriptions = [
     {
-      name                  = "${local.pubsub_name}-sub"
+      name                  = "${local.app_name}.${local.topic_name}"
       dead_letter_topic     = module.pubsub-dlq.id
       service_account       = google_service_account.pubsub_sa.email
       max_delivery_attempts = 5
@@ -39,10 +37,35 @@ module "pubsub-dlq" {
   source     = "terraform-google-modules/pubsub/google"
   project_id = var.project_id
 
-  topic              = "${local.pubsub_name}-dlq"
+  topic              = "${local.app_name}.${local.topic_name}.dlq"
   pull_subscriptions = [
     {
-      name = "${local.pubsub_name}-dlq-sub"
+      name = "${local.app_name}.${local.topic_name}.dlq"
     }
   ]
+}
+
+resource "google_monitoring_alert_policy" "alert_policy" {
+  display_name = "Messages on dead-letter queue (app: ${local.app_name}, topic: ${local.topic_name})"
+  combiner     = "OR"
+  conditions {
+    display_name = "Cloud Pub/Sub Subscription - Unacked messages"
+    condition_threshold {
+      filter     = "resource.type = \"pubsub_subscription\" AND resource.labels.subscription_id = \"${module.pubsub-dlq.subscription_names.0}\" AND metric.type = \"pubsub.googleapis.com/subscription/num_undelivered_messages\""
+      duration   = "120s"
+      comparison = "COMPARISON_GT"
+      aggregations {
+        alignment_period   = "60s"
+        per_series_aligner = "ALIGN_MAX"
+      }
+    }
+  }
+  notification_channels = [
+    "projects/b32-demo-projects/notificationChannels/6746093406737316903"
+  ]
+
+  user_labels = {
+    app : local.app_name
+    environment : local.environment
+  }
 }

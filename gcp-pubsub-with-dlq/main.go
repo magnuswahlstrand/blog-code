@@ -1,25 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"os"
-	"sync/atomic"
-	"time"
+	"os/signal"
 )
 
-// Copied from https://github.com/GoogleCloudPlatform/golang-samples/blob/main/pubsub/subscriptions/sync_pull.go
-
-// [START pubsub_subscriber_sync_pull]
-import (
-	"cloud.google.com/go/pubsub"
-)
-
-func pullMsgsSync(w io.Writer, projectID, subID string) error {
-
-	ctx := context.Background()
+// Inspired by https://github.com/GoogleCloudPlatform/golang-samples/blob/main/pubsub/subscriptions/sync_pull.go
+func processMessages(ctx context.Context, projectID, subID string) error {
 	client, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
 		return fmt.Errorf("pubsub.NewClient: %v", err)
@@ -28,37 +20,31 @@ func pullMsgsSync(w io.Writer, projectID, subID string) error {
 
 	sub := client.Subscription(subID)
 
-	// Turn on synchronous mode. This makes the subscriber use the Pull RPC rather
-	// than the StreamingPull RPC, which is useful for guaranteeing MaxOutstandingMessages,
-	// the max number of messages the client will hold in memory at a time.
-	sub.ReceiveSettings.Synchronous = true
-	sub.ReceiveSettings.MaxOutstandingMessages = 10
-
-	// Receive messages for 10 seconds, which simplifies testing.
-	// Comment this out in production, since `Receive` should
-	// be used as a long running operation.
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	var received int32
-	fmt.Fprintln(w, "Waiting for messages")
+	fmt.Println("Waiting for messages")
 	err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
-		fmt.Fprintf(w, "Got message: %q\n", string(msg.Data))
-		atomic.AddInt32(&received, 1)
-		msg.Ack()
+		fmt.Printf("Got message: %q with %d delivery attempts\n", string(msg.Data), *msg.DeliveryAttempt)
+
+		if bytes.HasPrefix(msg.Data, []byte("DEAD-LETTER")) {
+			msg.Nack()
+		} else {
+			msg.Ack()
+		}
+
 	})
 	if err != nil {
 		return fmt.Errorf("sub.Receive: %v", err)
 	}
-	fmt.Fprintf(w, "Received %d messages\n", received)
-
 	return nil
 }
 
 func main() {
 	projectID := "b32-demo-projects"
-	subID := "user-created-sub"
-	err := pullMsgsSync(os.Stdout, projectID, subID)
+	subID := "app.user-created"
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	err := processMessages(ctx, projectID, subID)
 	if err != nil {
 		log.Fatalln("error", err)
 	}
