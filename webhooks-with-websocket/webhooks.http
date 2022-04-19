@@ -1,0 +1,11 @@
+POST http://localhost:5001/
+Content-Type: application/json
+
+{
+  "resource_id": "some-id",
+  "some": 999,
+  "payload": "content"
+}
+
+
+###
