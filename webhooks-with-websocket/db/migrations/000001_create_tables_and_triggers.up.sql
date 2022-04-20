@@ -9,6 +9,7 @@ CREATE TABLE webhooks
 (
     id              uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
     subscription_id uuid  NOT NULL,
+    -- created_at must be text, since the row_to_json drops the timestamp --
     created_at      text  NOT NULL   DEFAULT CURRENT_TIMESTAMP,
     acked_at        TIMESTAMP,
     payload         JSONB NOT NULL,

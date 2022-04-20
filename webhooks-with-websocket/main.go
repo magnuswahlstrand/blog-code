@@ -18,8 +18,81 @@ import (
 	"time"
 )
 
-func main() {
+func waitForNotification(l *pq.Listener, callback func(string) error) {
+	fmt.Println("Start monitoring PostgreSQL...")
+	for {
+		select {
+		case n := <-l.Notify:
 
+			fmt.Println("Received data from channel [", n.Channel, "] :")
+			// Prepare notification payload for pretty print
+
+			if err := callback(n.Extra); err != nil {
+				return
+			}
+
+		case <-time.After(90 * time.Second):
+			fmt.Println("Received no events for 90 seconds, checking connection")
+			go func() {
+				l.Ping()
+			}()
+			return
+		}
+	}
+}
+
+type handler struct {
+	websockets *melody.Melody
+	queries    *webhooksdb.Queries
+}
+
+func (h *handler) handleWSUpgrade(w http.ResponseWriter, r *http.Request) {
+	// TODO: Improve authorization :-)
+	sID := r.URL.Query().Get("sid")
+	id, err := uuid.Parse(sID)
+	if err != nil {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	keys := map[string]interface{}{
+		"subscription_id": id,
+	}
+	if err := h.websockets.HandleRequestWithKeys(w, r, keys); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+}
+
+func (h *handler) handleEvent(w http.ResponseWriter, r *http.Request) {
+	b, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Println("io.ReadAll", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	id, err := h.queries.InsertWebhook(r.Context(), webhooksdb.InsertWebhookParams{
+		SubscriptionID: uuid.MustParse("a2cce679-0b59-4245-a389-298a423945c0"),
+		Payload:        b,
+	})
+	if err != nil {
+		log.Println("insertWebhook", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"id": id,
+	}); err != nil {
+		log.Println("Encode", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	return
+}
+
+func main() {
 	var connectionInfo = "postgres://postgres:password@localhost:5432/postgres?sslmode=disable"
 
 	db, err := sql.Open("postgres", connectionInfo)
@@ -31,28 +104,22 @@ func main() {
 		log.Fatal("failed to run migrations", err)
 	}
 
-	reportProblem := func(ev pq.ListenerEventType, err error) {
-		if err != nil {
-			fmt.Println(err.Error())
-		}
+	listener, err := dbListener(connectionInfo)
+	if err != nil {
+		log.Fatal("failed to start listener", err)
 	}
 
-	listener := pq.NewListener(connectionInfo, 10*time.Second, time.Minute, reportProblem)
-	if err = listener.Listen("webhook_created"); err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Start monitoring PostgreSQL...")
+	m := melody.New()
+	queries := webhooksdb.New(db)
 
 	s := Service{
-		sessions: map[uuid.UUID]*WebhookSession{},
-		queries:  webhooksdb.New(db),
+		pubsub:  NewPubsub(),
+		queries: queries,
 	}
-	go func() {
-		for {
-			s.waitForNotification(listener)
-		}
-	}()
+	h := handler{
+		websockets: m,
+		queries:    queries,
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -61,73 +128,34 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.StripSlashes)
 
-	m := melody.New()
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "index.html")
-	})
+	// HTTP handlers
+	r.Get("/ws", h.handleWSUpgrade)
+	r.Post("/", h.handleEvent)
 
-	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
-		sID := r.URL.Query().Get("sid")
-		keys := map[string]interface{}{
-			"subscription_id": uuid.MustParse(sID),
-		}
-		m.HandleRequestWithKeys(w, r, keys)
-	})
+	// Websocket handlers
+	m.HandleConnect(s.handleWebsocketConnect)
+	m.HandleDisconnect(s.handleWebsocketDisconnect)
+	m.HandleMessage(s.handleWebsocketMessage)
 
-	r.Post("/", func(w http.ResponseWriter, r *http.Request) {
-		b, err := io.ReadAll(r.Body)
-		if err != nil {
-			log.Fatal("io.ReadAll", err)
-		}
+	go func() {
+		waitForNotification(listener, s.handleDBNotifications)
+	}()
 
-		id, err := s.queries.InsertWebhook(r.Context(), webhooksdb.InsertWebhookParams{
-			SubscriptionID: uuid.MustParse("a2cce679-0b59-4245-a389-298a423945c0"),
-			Payload:        b,
-		})
-		if err != nil {
-			log.Fatal("insertWebhook", err)
-		}
-
-		if err := json.NewEncoder(w).Encode(map[string]interface{}{
-			"id": id,
-		}); err != nil {
-			log.Fatal("encode JSON", err)
-		}
-		return
-	})
-
-	m.HandleConnect(func(sess *melody.Session) {
-		fmt.Println("New connection")
-		subID := sess.MustGet("subscription_id").(uuid.UUID)
-		s.AddWebhookSession(sess, subID)
-	})
-	m.HandleDisconnect(func(sess *melody.Session) {
-		fmt.Println("Disconnected")
-		subID := sess.MustGet("subscription_id").(uuid.UUID)
-		s.RemoveWebhookSession(subID)
-	})
-	m.HandleMessage(func(sess *melody.Session, received []byte) {
-		fmt.Println("Receive message")
-		subID := sess.MustGet("subscription_id").(uuid.UUID)
-
-		// TODO: handle JSON events
-		id, err := uuid.Parse(string(received))
-		if err != nil {
-			log.Println("error when parsing received message", err)
-			return
-		}
-
-		s.ForwardAck(id, subID)
-	})
 	if err := http.ListenAndServe(":5001", r); err != nil {
 		log.Fatal(err)
 	}
 }
 
-//
-//type Webhook struct {
-//	ID             uuid.UUID              `json:"id"`
-//	SubscriptionID uuid.UUID              `json:"subscription_id"`
-//	Payload        map[string]interface{} `json:"payload"`
-//	PublishedAt    bool                   `json:"published_at"`
-//}
+func dbListener(connectionInfo string) (*pq.Listener, error) {
+	reportProblem := func(ev pq.ListenerEventType, err error) {
+		if err != nil {
+			fmt.Println(err.Error())
+		}
+	}
+
+	listener := pq.NewListener(connectionInfo, 10*time.Second, time.Minute, reportProblem)
+	if err := listener.Listen("webhook_created"); err != nil {
+		return nil, err
+	}
+	return listener, nil
+}

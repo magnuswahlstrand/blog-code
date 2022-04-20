@@ -15,7 +15,7 @@ type WebhookSession struct {
 	newCh          chan webhooksdb.Webhook
 	acknowledgedCh chan uuid.UUID
 
-	listWebhooks            func(background context.Context) ([]webhooksdb.Webhook, error)
+	listWebhooks            func(background context.Context, count int32) ([]webhooksdb.Webhook, error)
 	markWebhookAcknowledged func(background context.Context, id uuid.UUID) (int64, error)
 
 	unackedMessages map[uuid.UUID]bool
@@ -25,7 +25,7 @@ const maxCapacity = 5
 
 func (s *WebhookSession) start() {
 	fmt.Println("starting session")
-	webhooks, err := s.listWebhooks(context.TODO())
+	webhooks, err := s.listWebhooks(context.TODO(), maxCapacity)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -35,6 +35,10 @@ func (s *WebhookSession) start() {
 		sendCh <- webhook
 	}
 
+	// First send all outstanding messages from the database
+
+	// Listen to new messages
+
 	for {
 		isEmpty := len(s.unackedMessages) < 1 && len(sendCh) < 1
 
@@ -42,49 +46,33 @@ func (s *WebhookSession) start() {
 		// TODO: handle if client disconnects here
 		// TODO: handle if server shutdown
 		select {
-		case msg0 := <-sendCh:
-			if err := s.sendIndentedMessage(msg0.Payload); err != nil {
+		case wh := <-sendCh:
+			if err := s.sendIndentedMessage(wh.Payload); err != nil {
 				fmt.Println("something went wrong:-(", err)
 				continue
 			}
-			s.unackedMessages[msg0.ID] = true
-		case msg1 := <-s.acknowledgedCh:
+			s.unackedMessages[wh.ID] = true
+		case ackID := <-s.acknowledgedCh:
 
 			// Received ack message
-			fmt.Println("received", msg1)
-			i, _ := s.markWebhookAcknowledged(context.TODO(), msg1)
+			fmt.Println("received", ackID)
+			i, _ := s.markWebhookAcknowledged(context.TODO(), ackID)
 			if i != 1 {
 				fmt.Println("did not update any webhooks :-(")
 			}
 			// We need to delete here, just in case other process has marked webhook as acked
-			delete(s.unackedMessages, msg1)
+			delete(s.unackedMessages, ackID)
 
 		// New webhook received
-		case newMessage := <-s.newCh:
+		case wh := <-s.newCh:
 			if !isEmpty {
-				fmt.Println("unprocessed messages is not zero, skip message", newMessage)
+				fmt.Println("unprocessed messages is not zero, skip message", wh)
 				continue
 			}
 
-			fmt.Println("received, adding to queue", newMessage)
-			sendCh <- newMessage
+			fmt.Println("received, adding to queue", wh)
+			sendCh <- wh
 		}
-
-		//for _, hook := range webhooks {
-		//	if err := s.sendIndentedMessage(hook.Payload); err != nil {
-		//		fmt.Println("failed something", err)
-		//		continue
-		//	}
-		//}
-		//// We have now parsed all the webhooks in the unackedMessages, we accept all new webhooks
-		//
-		//for hook := range s.newCh {
-		//	fmt.Println("received message")
-		//	if err := s.sendIndentedMessage(hook.Payload); err != nil {
-		//		fmt.Println("failed something", err)
-		//		continue
-		//	}
-		//}
 	}
 }
 
@@ -97,4 +85,9 @@ func (s *WebhookSession) sendIndentedMessage(payload json.RawMessage) error {
 		return err
 	}
 	return nil
+}
+
+func (s *WebhookSession) shutdown() {
+	// TODO: Do proper shutdown here
+	fmt.Println("some shutdown here")
 }
