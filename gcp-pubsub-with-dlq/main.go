@@ -1,51 +1,76 @@
-package main
+package gcp_pubsub_with_dlq
 
 import (
 	"bytes"
 	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
-	"log"
-	"os"
-	"os/signal"
 )
 
-// Inspired by https://github.com/GoogleCloudPlatform/golang-samples/blob/main/pubsub/subscriptions/sync_pull.go
-func processMessages(ctx context.Context, projectID, subID string) error {
+func ProcessMessagesWithFilter(ctx context.Context, projectID, subID string, filterFunc func(msg *pubsub.Message) bool) error {
 	client, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
 		return fmt.Errorf("pubsub.NewClient: %v", err)
 	}
 	defer client.Close()
 
-	sub := client.Subscription(subID)
+	subscription := client.Subscription(subID)
+	return subscription.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
+		txt := fmt.Sprintf("Received message: %q (attempt %d)", string(msg.Data), *msg.DeliveryAttempt)
 
-	fmt.Println("Waiting for messages")
-	err = sub.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
-		fmt.Printf("Got message: %q with %d delivery attempts\n", string(msg.Data), *msg.DeliveryAttempt)
-
-		if bytes.HasPrefix(msg.Data, []byte("DEAD-LETTER")) {
+		if filterFunc(msg) {
+			fmt.Println(txt, " - NACK")
 			msg.Nack()
-		} else {
-			msg.Ack()
+			return
 		}
 
+		fmt.Println(txt, " - ACK")
+		msg.Ack()
 	})
-	if err != nil {
-		return fmt.Errorf("sub.Receive: %v", err)
-	}
-	return nil
 }
 
-func main() {
-	projectID := "b32-demo-projects"
-	subID := "app.user-created"
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-
-	err := processMessages(ctx, projectID, subID)
+// Inspired by https://github.com/GoogleCloudPlatform/golang-samples/blob/main/pubsub/subscriptions/sync_pull.go
+func ProcessMessages(ctx context.Context, projectID, subID string) error {
+	client, err := pubsub.NewClient(ctx, projectID)
 	if err != nil {
-		log.Fatalln("error", err)
+		return fmt.Errorf("pubsub.NewClient: %v", err)
 	}
+	defer client.Close()
+
+	subscription := client.Subscription(subID)
+	return subscription.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
+		txt := fmt.Sprintf("Received message: %q (attempt %d)", string(msg.Data), *msg.DeliveryAttempt)
+
+		if bytes.HasPrefix(msg.Data, []byte("dead")) {
+			fmt.Println(txt, " - NACK")
+			msg.Nack()
+			return
+		}
+
+		fmt.Println(txt, " - ACK")
+		msg.Ack()
+	})
+}
+
+func RepublishMessages(ctx context.Context, projectID, dlqSubID, toTopicID string) error {
+	client, err := pubsub.NewClient(ctx, projectID)
+	if err != nil {
+		return fmt.Errorf("pubsub.NewClient: %v", err)
+	}
+	defer client.Close()
+
+	subscription := client.Subscription(dlqSubID)
+	topic := client.Topic(toTopicID)
+
+	return subscription.Receive(ctx, func(_ context.Context, msg *pubsub.Message) {
+		// Republish message
+		result := topic.Publish(ctx, msg)
+		if _, err := result.Get(ctx); err != nil {
+			msg.Nack()
+			return
+		}
+
+		fmt.Printf("Republished message: %q\n", string(msg.Data))
+		msg.Ack()
+	})
 }

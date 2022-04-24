@@ -4,15 +4,10 @@ terraform {
 locals {
   topic_name  = "user-created"
   app_name    = "app"
-  environment = "integration"
 }
 
 provider "google" {
   project = var.project_id
-}
-
-resource "google_service_account" "pubsub_sa" {
-  account_id = "pubsub-sa"
 }
 
 module "pubsub-main" {
@@ -24,14 +19,12 @@ module "pubsub-main" {
     {
       name                  = "${local.app_name}.${local.topic_name}"
       dead_letter_topic     = module.pubsub-dlq.id
-      service_account       = google_service_account.pubsub_sa.email
       max_delivery_attempts = 5
       maximum_backoff       = "10s"
       minimum_backoff       = "1s"
     }
   ]
 }
-
 
 module "pubsub-dlq" {
   source     = "terraform-google-modules/pubsub/google"
@@ -66,6 +59,5 @@ resource "google_monitoring_alert_policy" "alert_policy" {
 
   user_labels = {
     app : local.app_name
-    environment : local.environment
   }
 }
