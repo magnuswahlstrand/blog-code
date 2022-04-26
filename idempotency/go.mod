@@ -4,6 +4,7 @@ go 1.18
 
 require (
 	github.com/gofiber/fiber/v2 v2.32.0
+	github.com/google/uuid v1.3.0
 	github.com/qiniu/qmgo v1.1.0
 	github.com/stretchr/testify v1.7.1
 	go.mongodb.org/mongo-driver v1.9.0
