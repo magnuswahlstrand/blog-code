@@ -7,18 +7,18 @@ import (
 	"sync"
 )
 
-var _ db = &db2{}
+var _ db = &inMemoryDB{}
 
 type db interface {
 	get(idempotencyKey string) (RecordedRequestResponse, bool, error)
 	update(idempotencyKey string, record RecordedRequestResponse) error
 }
-type db2 struct {
+type inMemoryDB struct {
 	db map[string][]byte
 	mu sync.Mutex
 }
 
-func (d *db2) get(idempotencyKey string) (RecordedRequestResponse, bool, error) {
+func (d *inMemoryDB) get(idempotencyKey string) (RecordedRequestResponse, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -35,7 +35,7 @@ func (d *db2) get(idempotencyKey string) (RecordedRequestResponse, bool, error) 
 	return record, true, nil
 }
 
-func (d *db2) update(idempotencyKey string, record RecordedRequestResponse) error {
+func (d *inMemoryDB) update(idempotencyKey string, record RecordedRequestResponse) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 

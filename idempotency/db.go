@@ -6,6 +6,8 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
+var _ db = &inMemoryDB{}
+
 //func (s *Service) listDBUsers(ctx context.Context, query string) ([]Order, error) {
 //	filter := bson.M{}
 //	if query != "" {
@@ -18,7 +20,7 @@ import (
 //	return users, nil
 //}
 
-func (s *Service) insertDBUser(ctx context.Context, u Order) (string, error) {
+func (s *IdempotenceChecker) insertDBUser(ctx context.Context, u Order) (string, error) {
 	res, err := s.mongo.InsertOne(ctx, bson.M{
 		"product_type": u.ProductType,
 	})

@@ -34,6 +34,7 @@ import (
 //	ctx := context.Background()
 //	db, err := qmgo.Open(ctx, mongoConfig)
 //	require.NoError(t, err)
+
 //	err = db.DropCollection(ctx)
 //	require.NoError(t, err)
 //
