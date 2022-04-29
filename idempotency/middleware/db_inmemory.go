@@ -1,6 +1,7 @@
-package main
+package middleware
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,33 +10,29 @@ import (
 
 var _ db = &inMemoryDB{}
 
-type db interface {
-	get(idempotencyKey string) (RecordedRequestResponse, bool, error)
-	update(idempotencyKey string, record RecordedRequestResponse) error
-}
 type inMemoryDB struct {
 	db map[string][]byte
 	mu sync.Mutex
 }
 
-func (d *inMemoryDB) get(idempotencyKey string) (RecordedRequestResponse, bool, error) {
+func (d *inMemoryDB) get(ctx context.Context, idempotencyKey string) (RequestRecording, bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	data, exists := d.db[idempotencyKey]
 	if !exists {
-		return RecordedRequestResponse{}, false, nil
+		return RequestRecording{}, false, nil
 	}
 
 	// TODO: handle error
-	var record RecordedRequestResponse
+	var record RequestRecording
 	if err := json.Unmarshal(data, &record); err != nil {
-		return RecordedRequestResponse{}, false, errors.New("failed to unmarshal response")
+		return RequestRecording{}, false, errors.New("failed to unmarshal response")
 	}
 	return record, true, nil
 }
 
-func (d *inMemoryDB) update(idempotencyKey string, record RecordedRequestResponse) error {
+func (d *inMemoryDB) update(ctx context.Context, idempotencyKey string, record RequestRecording) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -47,4 +44,8 @@ func (d *inMemoryDB) update(idempotencyKey string, record RecordedRequestRespons
 
 	d.db[idempotencyKey] = data
 	return nil
+}
+
+func NewInMemoryDB() *inMemoryDB {
+	return &inMemoryDB{db: map[string][]byte{}}
 }

@@ -2,30 +2,18 @@ package main
 
 import (
 	"github.com/gofiber/fiber/v2"
+	errorhandler "github.com/magnuswahlstrand/blog-code/idempotency/error_handler"
 	"net/http"
 )
 
-const HeaderIdempotencyKey = "Idempotency-Key"
-
-type RecordedRequestResponse struct {
-	RequestBody []byte
-	Response    Response
-	Completed   bool
-}
-
-type Response struct {
-	Status int
-	Data   []byte
-}
-
-func responseError(c *fiber.Ctx, request int, message ...string) error {
-	return c.Status(request).JSON(fiber.NewError(request, message...))
+type Order struct {
+	ProductType string `json:"product_type"`
 }
 
 func (s *Service) HandlerOrder(c *fiber.Ctx) error {
 	var order Order
 	if err := c.BodyParser(&order); err != nil {
-		return responseError(c, http.StatusInternalServerError)
+		return errorhandler.Handle(c, http.StatusInternalServerError)
 	}
 
 	// Do work here
