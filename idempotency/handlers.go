@@ -4,7 +4,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"net/http"
-	time "time"
 )
 
 const HeaderIdempotencyKey = "Idempotency-Key"
@@ -44,7 +43,11 @@ func (s *Service) HandlerOrder(c *fiber.Ctx) error {
 		return responseError(c, http.StatusInternalServerError)
 	}
 
-	recorded, exists := s.db2.get(idempotencyKey)
+	recorded, exists, err := s.db2.get(idempotencyKey)
+	if err != nil {
+		return responseError(c, http.StatusInternalServerError, err.Error())
+	}
+
 	if exists {
 		if order.ProductType != recorded.Param {
 			return responseError(c, http.StatusUnprocessableEntity, "idempotency key previously used with other payload")
@@ -65,10 +68,8 @@ func (s *Service) HandlerOrder(c *fiber.Ctx) error {
 	}
 	s.db2.update(idempotencyKey, record)
 
-	// Do something here
-	if s.db2.shouldSleep {
-		time.Sleep(1 * time.Second)
-	}
+	// Do work here
+	s.Process()
 
 	// Store result
 	record.Completed = true

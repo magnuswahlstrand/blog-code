@@ -26,33 +26,25 @@ func mongoClient() *qmgo.QmgoClient {
 }
 
 type Service struct {
-	mongo *qmgo.QmgoClient
-	db2   db2
+	mongo   *qmgo.QmgoClient
+	db2     db2
+	Process func()
 }
 
-func setup(shouldSleep ...bool) *fiber.App {
+func setup() (*fiber.App, *Service) {
 	//mongo := mongoClient()
 
-	var sleeper bool
-	if len(shouldSleep) > 0 {
-		sleeper = true
-	}
-
-	s := Service{
-		//mongo: mongo,
-
-		db2: db2{
-			db:          map[string][]byte{},
-			shouldSleep: sleeper,
-		},
+	s := &Service{
+		db2:     db2{db: map[string][]byte{}},
+		Process: func() {}, // Can be overridden in tests
 	}
 
 	app := fiber.New()
 	app.Post("/order", s.HandlerOrder)
-	return app
+	return app, s
 }
 
 func main() {
-	app := setup()
+	app, _ := setup()
 	log.Fatal(app.Listen(":8080"))
 }

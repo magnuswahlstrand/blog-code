@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"net/http"
 	"testing"
-	"time"
 )
 
 // Many tests taken from the IETF-draft at
@@ -69,6 +68,30 @@ func mustPostRequest(t *testing.T, url string, v interface{}) *http.Request {
 	return req
 }
 
+func Test_Normal_Returns201(t *testing.T) {
+	app, _ := setup()
+	idempotencyKey := uuid.NewString()
+
+	// Act
+	res := createOrder(t, app, Order{ProductType: "bike"}, idempotencyKey)
+
+	// Assert
+	require.Equal(t, 201, res.StatusCode)
+}
+
+func Test_Retry_Returns201AndSamePayload(t *testing.T) {
+	app, _ := setup()
+	idempotencyKey := uuid.NewString()
+
+	// Act
+	res := createOrder(t, app, Order{ProductType: "bike"}, idempotencyKey)
+	resRetry := createOrder(t, app, Order{ProductType: "bike"}, idempotencyKey)
+
+	assert.Equal(t, res.StatusCode, resRetry.StatusCode)
+	assert.Equal(t, res.Header, resRetry.Header)
+	assert.Equal(t, res.Body, resRetry.Body)
+}
+
 /*
    If the "Idempotency-Key" request header is missing for a documented
    idempotent operation requiring this header, the resource server MUST
@@ -82,33 +105,8 @@ func mustPostRequest(t *testing.T, url string, v interface{}) *http.Request {
      rel="describedby"; type="text/html"
 
 */
-
-func Test_Normal_Returns201(t *testing.T) {
-	app := setup()
-	idempotencyKey := uuid.NewString()
-
-	// Act
-	res := createOrder(t, app, Order{ProductType: "bike"}, idempotencyKey)
-
-	// Assert
-	require.Equal(t, 201, res.StatusCode)
-}
-
-func Test_Retry_Returns201AndSamePayload(t *testing.T) {
-	app := setup()
-	idempotencyKey := uuid.NewString()
-
-	// Act
-	res := createOrder(t, app, Order{ProductType: "bike"}, idempotencyKey)
-	resRetry := createOrder(t, app, Order{ProductType: "bike"}, idempotencyKey)
-
-	assert.Equal(t, res.StatusCode, resRetry.StatusCode)
-	assert.Equal(t, res.Header, resRetry.Header)
-	assert.Equal(t, res.Body, resRetry.Body)
-}
-
 func Test_ErrorScenario_IdempotencyKeyMissing_Returns400(t *testing.T) {
-	app := setup()
+	app, _ := setup()
 
 	// Act
 	req := mustPostRequest(t, "/order", struct{}{})
@@ -123,7 +121,7 @@ func Test_ErrorScenario_IdempotencyKeyMissing_Returns400(t *testing.T) {
 }
 
 func Test_ErrorScenario_IdempotencyKeyNotUUIDv4_Returns400(t *testing.T) {
-	app := setup()
+	app, _ := setup()
 
 	// Act
 	req := mustPostRequest(t, "/order", struct{}{})
@@ -152,7 +150,7 @@ func Test_ErrorScenario_IdempotencyKeyNotUUIDv4_Returns400(t *testing.T) {
 
 */
 func Test_ErrorScenario_IdempotencyKeyReused_Returns422(t *testing.T) {
-	app := setup()
+	app, _ := setup()
 
 	// Arrange
 	idempotencyKey := uuid.NewString()
@@ -180,23 +178,33 @@ func Test_ErrorScenario_IdempotencyKeyReused_Returns422(t *testing.T) {
   rel="describedby"; type="text/html"
 */
 func Test_ErrorScenario_InitialRequestNotCompleted_Returns409(t *testing.T) {
-	app := setup(true)
+	waitCh := make(chan bool)
+	app, service := setup()
+
+	// Override service process
+	service.Process = func() {
+		waitCh <- true // Switch to main
+		<-waitCh       // Wait for main
+	}
 
 	// Arrange
 	idempotencyKey := uuid.NewString()
 	go func() {
 		res := createOrder(t, app, Order{ProductType: "car"}, idempotencyKey)
 		require.Equal(t, http.StatusCreated, res.StatusCode)
+		waitCh <- true
 	}()
 
 	// Act
-	// TODO: handle this by the db func instead.
-	time.Sleep(100 * time.Millisecond)
+	<-waitCh // Wait for goroutine
 	res := createOrder(t, app, Order{ProductType: "car"}, idempotencyKey)
+	waitCh <- true // Restart goroutine to main
 
 	// Assert
 	require.Equal(t, 409, res.StatusCode)
 	var respError fiber.Error
 	require.NoError(t, json.NewDecoder(res.Body).Decode(&respError))
 	require.Equal(t, "request already in process", respError.Message)
+
+	<-waitCh // Wait for goroutine to finish
 }
