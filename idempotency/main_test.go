@@ -7,8 +7,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"io"
-	"log"
 	"net/http"
 	"testing"
 )
@@ -73,7 +71,7 @@ func mustPostRequest(t *testing.T, url string, v interface{}) *http.Request {
 	return req
 }
 
-func Test_Normal_Returns201(t *testing.T) {
+func Test_FirstRequest_Returns201(t *testing.T) {
 	app, _ := setup()
 	idempotencyKey := uuid.NewString()
 
@@ -81,16 +79,7 @@ func Test_Normal_Returns201(t *testing.T) {
 	res := createOrder(t, app, Order{ProductType: "bike"}, idempotencyKey)
 
 	// Assert
-	require.Equal(t, 201, res.StatusCode, readAll(res.Body))
-}
-
-func readAll(body io.ReadCloser) string {
-	b, err := io.ReadAll(body)
-	if err != nil {
-		log.Fatalln(err)
-		return ""
-	}
-	return string(b)
+	require.Equal(t, 201, res.StatusCode)
 }
 
 func Test_Retry_Returns201AndSamePayload(t *testing.T) {
@@ -120,7 +109,7 @@ func Test_Retry_Returns201AndSamePayload(t *testing.T) {
      rel="describedby"; type="text/html"
 
 */
-func Test_ErrorScenario_IdempotencyKeyMissing_Returns400(t *testing.T) {
+func Test_IdempotencyKeyMissing_Returns400(t *testing.T) {
 	app, _ := setup()
 
 	// Act
@@ -135,7 +124,7 @@ func Test_ErrorScenario_IdempotencyKeyMissing_Returns400(t *testing.T) {
 	require.Equal(t, "idempotency key missing", respError.Message)
 }
 
-func Test_ErrorScenario_IdempotencyKeyNotUUIDv4_Returns400(t *testing.T) {
+func Test_IdempotencyKeyNotUUIDv4_Returns400(t *testing.T) {
 	app, _ := setup()
 
 	// Act
@@ -164,7 +153,7 @@ func Test_ErrorScenario_IdempotencyKeyNotUUIDv4_Returns400(t *testing.T) {
   rel="describedby"; type="text/html"
 
 */
-func Test_ErrorScenario_IdempotencyKeyReused_Returns422(t *testing.T) {
+func Test_IdempotencyKeyReusedWithDifferentPayload_Returns422(t *testing.T) {
 	app, _ := setup()
 
 	// Arrange
@@ -193,34 +182,34 @@ func Test_ErrorScenario_IdempotencyKeyReused_Returns422(t *testing.T) {
   rel="describedby"; type="text/html"
 */
 
-//func Test_ErrorScenario_InitialRequestNotCompleted_Returns409(t *testing.T) {
-//	waitCh := make(chan bool)
-//	app, service := setup()
-//
-//	// Override service process
-//	service.Process = func() {
-//		waitCh <- true // Switch to main
-//		<-waitCh       // Wait for main
-//	}
-//
-//	// Arrange
-//	idempotencyKey := uuid.NewString()
-//	go func() {
-//		res := createOrder(t, app, Order{ProductType: "car"}, idempotencyKey)
-//		require.Equal(t, http.StatusCreated, res.StatusCode)
-//		waitCh <- true
-//	}()
-//
-//	// Act
-//	<-waitCh // Wait for goroutine
-//	res := createOrder(t, app, Order{ProductType: "car"}, idempotencyKey)
-//	waitCh <- true // Restart goroutine to main
-//
-//	// Assert
-//	require.Equal(t, 409, res.StatusCode)
-//	var respError fiber.Error
-//	require.NoError(t, json.NewDecoder(res.Body).Decode(&respError))
-//	require.Equal(t, "request already in process", respError.Message)
-//
-//	<-waitCh // Wait for goroutine to finish
-//}
+func Test_InitialRequestNotCompleted_Returns409(t *testing.T) {
+	waitCh := make(chan bool)
+	app, service := setup()
+
+	// Override service process
+	service.Process = func() {
+		waitCh <- true // Switch to main
+		<-waitCh       // Wait for main
+	}
+
+	// Arrange
+	idempotencyKey := uuid.NewString()
+	go func() {
+		res := createOrder(t, app, Order{ProductType: "car"}, idempotencyKey)
+		require.Equal(t, http.StatusCreated, res.StatusCode)
+		waitCh <- true
+	}()
+
+	// Act
+	<-waitCh // Wait for goroutine
+	res := createOrder(t, app, Order{ProductType: "car"}, idempotencyKey)
+	waitCh <- true // Restart goroutine to main
+
+	// Assert
+	require.Equal(t, 409, res.StatusCode)
+	var respError fiber.Error
+	require.NoError(t, json.NewDecoder(res.Body).Decode(&respError))
+	require.Equal(t, "request already in process", respError.Message)
+
+	<-waitCh // Wait for goroutine to finish
+}

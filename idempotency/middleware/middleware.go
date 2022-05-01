@@ -34,7 +34,7 @@ func (i *base) IdempotencyMiddleware(c *fiber.Ctx) error {
 		return errorhandler.Handle(c, http.StatusBadRequest, "idempotency must be a UUID V4")
 	}
 
-	// 2. Check if request exists
+	// 2. Check if key has been seen before
 	record, exists, err := i.mongo2.get(c.Context(), idempotencyKey)
 	if err != nil {
 		return errorhandler.Handle(c, http.StatusInternalServerError, err.Error())
@@ -68,12 +68,12 @@ func (i *base) IdempotencyMiddleware(c *fiber.Ctx) error {
 		return errorhandler.Handle(c, http.StatusInternalServerError, err.Error())
 	}
 
-	// 4. Go to the regular handler
+	// 4a. Go to the regular handler
 	if err = c.Next(); err != nil {
 		return errorhandler.Handle(c, http.StatusInternalServerError, err.Error())
 	}
 
-	// Record results
+	// 5a. Record results
 	newRecord.Completed = true
 	newRecord.ResponseStatus = c.Response().StatusCode()
 	newRecord.ResponseBody = c.Response().Body()
